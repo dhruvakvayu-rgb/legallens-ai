@@ -19,6 +19,7 @@ export type ClauseTopic =
   | 'penalty'
   | 'governing'
   | 'other';
+  
 
 export interface ParsedRisk {
   title: string;
@@ -75,6 +76,26 @@ export interface DocumentAnalysis {
   kbMatches: MatchedPattern[];
   /** Standard protections absent from this document */
   missingProtections: string[];
+  /** Financial & transaction risk analysis */
+  financialRisk: FinancialRisk;
+}
+
+// ─── Financial Risk Types ─────────────────────────────────────────────────────
+
+export type FinancialRiskLevel = 'low' | 'medium' | 'high';
+
+export interface FinancialRisk {
+  /** 0–30 points added to the base clause risk score */
+  score: number;
+  clarityLevel: FinancialRiskLevel;
+  paymentMethodRisk: FinancialRiskLevel;
+  timelineRisk: FinancialRiskLevel;
+  extractedAmounts: string[];
+  extractedDates: string[];
+  paymentMethods: string[];
+  installments: string[];
+  observations: string[];
+  scoreBreakdown: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -984,35 +1005,173 @@ function buildGuidance(
   return items;
 }
 
+// ─── Financial & Transaction Risk Analysis ────────────────────────────────────
+
+function analyzeFinancialRisk(text: string): FinancialRisk {
+  const lower = text.toLowerCase();
+
+  // ── Extract amounts ───────────────────────────────────────────────────────
+  const amountMatches = [
+    ...text.matchAll(/(?:₹|Rs\.?\s*|INR\s*|USD\s*|\$|€|£)\s*[\d,]+(?:\.\d{1,2})?(?:\s*(?:lakh|crore|thousand|million|billion))?/gi),
+    ...text.matchAll(/[\d,]+(?:\.\d{1,2})?\s*(?:lakh|crore)\s*(?:rupees?|only)?/gi),
+    ...text.matchAll(/\b[\d,]+(?:\.\d{2})?\s*(?:dollars?|euros?|pounds?)\b/gi),
+  ];
+  const extractedAmounts = [...new Set(amountMatches.map(m => m[0].trim().replace(/\s+/g, ' ')))].slice(0, 6);
+
+  // ── Extract dates ─────────────────────────────────────────────────────────
+  const dateMatches = [
+    ...text.matchAll(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi),
+    ...text.matchAll(/\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/g),
+    ...text.matchAll(/\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December),?\s+\d{4}\b/gi),
+  ];
+  const extractedDates = [...new Set(dateMatches.map(m => m[0].trim()))].slice(0, 6);
+
+  // ── Extract payment methods ───────────────────────────────────────────────
+  const methodPatterns: Record<string, RegExp> = {
+    'Bank Transfer / NEFT / RTGS': /\b(?:neft|rtgs|imps|bank transfer|wire transfer|electronic transfer|online transfer)\b/i,
+    'Cheque / Demand Draft':        /\b(?:cheque|check|demand draft|dd|banker.s draft)\b/i,
+    'Cash':                         /\b(?:cash|in cash|cash payment|paid in cash)\b/i,
+    'UPI / Digital Payment':        /\b(?:upi|gpay|phonepe|paytm|digital payment|online payment)\b/i,
+    'Credit / Debit Card':          /\b(?:credit card|debit card|card payment)\b/i,
+  };
+  const paymentMethods: string[] = [];
+  for (const [method, pattern] of Object.entries(methodPatterns)) {
+    if (pattern.test(lower)) paymentMethods.push(method);
+  }
+
+  // ── Extract installment details ───────────────────────────────────────────
+  const installmentMatches = [
+    ...text.matchAll(/(?:installment|instalment|tranche|milestone|payment\s+\d+)[^\n.]{0,120}/gi),
+    ...text.matchAll(/(?:first|second|third|final|last)\s+(?:payment|installment|tranche)[^\n.]{0,100}/gi),
+    ...text.matchAll(/\d+\s*(?:equal\s+)?(?:monthly|quarterly|annual)\s+(?:installments?|payments?)[^\n.]{0,80}/gi),
+  ];
+  const installments = [...new Set(installmentMatches.map(m => m[0].trim().slice(0, 120)))].slice(0, 4);
+
+  // ── Financial clarity risk ────────────────────────────────────────────────
+  let clarityScore = 0; // 0=low risk, 10=high risk
+  const observations: string[] = [];
+
+  if (extractedAmounts.length === 0) {
+    clarityScore += 10;
+    observations.push('No monetary amounts detected — financial terms are unclear or absent.');
+  } else if (extractedAmounts.length === 1) {
+    clarityScore += 5;
+    observations.push(`Only one amount found (${extractedAmounts[0]}) — payment breakdown may be incomplete.`);
+  } else {
+    observations.push(`${extractedAmounts.length} amounts identified: ${extractedAmounts.slice(0, 3).join(', ')}${extractedAmounts.length > 3 ? '…' : ''}.`);
+  }
+
+  const clarityLevel: FinancialRiskLevel =
+    clarityScore >= 10 ? 'high' : clarityScore >= 5 ? 'medium' : 'low';
+
+  // ── Payment method risk ───────────────────────────────────────────────────
+  let methodScore = 0;
+  const hasCash = paymentMethods.some(m => m.includes('Cash'));
+  const hasBank = paymentMethods.some(m => m.includes('Bank') || m.includes('Cheque') || m.includes('UPI'));
+
+  if (paymentMethods.length === 0) {
+    methodScore += 8;
+    observations.push('No payment method specified — method of transaction is undocumented.');
+  } else if (hasCash && hasBank) {
+    methodScore += 5;
+    observations.push(`Mixed payment methods detected (${paymentMethods.join(', ')}) — cash transactions reduce traceability.`);
+  } else if (hasCash && !hasBank) {
+    methodScore += 10;
+    observations.push(`Cash-only payment detected — cash transactions reduce traceability and increase financial risk.`);
+  } else {
+    observations.push(`Traceable payment method(s) specified: ${paymentMethods.join(', ')}.`);
+  }
+
+  const paymentMethodRisk: FinancialRiskLevel =
+    methodScore >= 10 ? 'high' : methodScore >= 5 ? 'medium' : 'low';
+
+  // ── Timeline consistency risk ─────────────────────────────────────────────
+  let timelineScore = 0;
+
+  if (extractedDates.length === 0) {
+    timelineScore += 10;
+    observations.push('No payment dates or timelines detected — schedule is undefined.');
+  } else if (extractedDates.length === 1) {
+    timelineScore += 5;
+    observations.push(`Only one date found (${extractedDates[0]}) — a structured payment timeline is not established.`);
+  } else {
+    // Check for conflicting/inconsistent dates (simple heuristic: very close dates for large amounts)
+    observations.push(`${extractedDates.length} dates identified: ${extractedDates.slice(0, 3).join(', ')}${extractedDates.length > 3 ? '…' : ''}.`);
+  }
+
+  if (installments.length > 0) {
+    observations.push(`Installment structure detected: ${installments[0].slice(0, 80)}${installments[0].length > 80 ? '…' : ''}`);
+    timelineScore = Math.max(0, timelineScore - 3); // installments reduce timeline risk
+  }
+
+  const timelineRisk: FinancialRiskLevel =
+    timelineScore >= 10 ? 'high' : timelineScore >= 5 ? 'medium' : 'low';
+
+  // ── Composite financial risk score (0–30 added to clause score) ───────────
+  const rawFinancialScore = clarityScore + methodScore + timelineScore;
+  const score = Math.min(Math.round(rawFinancialScore), 30);
+
+  // ── Score breakdown explanation ───────────────────────────────────────────
+  const parts: string[] = [];
+  if (clarityLevel !== 'low')   parts.push(`financial clarity: ${clarityLevel}`);
+  if (paymentMethodRisk !== 'low') parts.push(`payment method: ${paymentMethodRisk}`);
+  if (timelineRisk !== 'low')   parts.push(`timeline: ${timelineRisk}`);
+  const scoreBreakdown = parts.length
+    ? `Financial risk adds ${score} points (${parts.join(', ')}).`
+    : `Financial risk is low — clear amounts, traceable methods, and defined timeline detected.`;
+
+  return {
+    score,
+    clarityLevel,
+    paymentMethodRisk,
+    timelineRisk,
+    extractedAmounts,
+    extractedDates,
+    paymentMethods,
+    installments,
+    observations,
+    scoreBreakdown,
+  };
+}
+
 // ─── 10. Risk Score & Recommendation ─────────────────────────────────────────
 
-function calcRiskScore(risks: ParsedRisk[]): number {
-  const total = risks.reduce((sum, r) => {
+function calcRiskScore(risks: ParsedRisk[], financialRisk: FinancialRisk): number {
+  const clauseTotal = risks.reduce((sum, r) => {
     if (r.severity === 'high') return sum + 30;
     if (r.severity === 'medium') return sum + 15;
     return sum + 5;
   }, 0);
-  return Math.min(total, 100);
+  return Math.min(clauseTotal + financialRisk.score, 100);
 }
 
-function calcRecommendation(risks: ParsedRisk[], score: number): { recommendation: Recommendation; reason: string } {
+function calcRecommendation(
+  risks: ParsedRisk[],
+  score: number,
+  financialRisk: FinancialRisk,
+): { recommendation: Recommendation; reason: string } {
   const highCount = risks.filter((r) => r.severity === 'high').length;
+  const hasHighFinancial = financialRisk.clarityLevel === 'high'
+    || financialRisk.paymentMethodRisk === 'high'
+    || financialRisk.timelineRisk === 'high';
+
+  const financialNote = financialRisk.score > 0 ? ` ${financialRisk.scoreBreakdown}` : '';
 
   if (highCount >= 2 || score >= 70) {
     return {
       recommendation: 'danger',
-      reason: `This document contains ${highCount} high-severity risk${highCount !== 1 ? 's' : ''} and a risk score of ${score}/100. Do not sign without legal review.`,
+      reason: `This document contains ${highCount} high-severity risk${highCount !== 1 ? 's' : ''} and a risk score of ${score}/100.${financialNote} Do not sign without legal review.`,
     };
   }
-  if (highCount >= 1 || score >= 35) {
+  if (highCount >= 1 || score >= 35 || hasHighFinancial) {
     return {
       recommendation: 'review',
-      reason: `This document has a risk score of ${score}/100 with ${highCount} high-severity issue${highCount !== 1 ? 's' : ''}. Review flagged clauses carefully before signing.`,
+      reason: `This document has a risk score of ${score}/100 with ${highCount} high-severity issue${highCount !== 1 ? 's' : ''}.${financialNote} Review flagged clauses carefully before signing.`,
     };
   }
   return {
     recommendation: 'safe',
-    reason: `No high-severity risks detected. Risk score is ${score}/100. Standard review is still recommended.`,
+    reason: `No high-severity risks detected. Risk score is ${score}/100.${financialNote} Standard review is still recommended.`,
   };
 }
 
@@ -1089,10 +1248,11 @@ export function analyzeDocument(text: string): DocumentAnalysis {
   const kbMatches = findMatchingPatterns(normalized);
   const missingProtections = detectMissingProtections(normalized);
   const facts = extractFacts(normalized);
+  const financialRisk = analyzeFinancialRisk(normalized);
 
   const risks = buildRisks(normalized, flags, kbMatches);
-  const riskScore = calcRiskScore(risks);
-  const { recommendation, reason: recommendationReason } = calcRecommendation(risks, riskScore);
+  const riskScore = calcRiskScore(risks, financialRisk);
+  const { recommendation, reason: recommendationReason } = calcRecommendation(risks, riskScore, financialRisk);
 
   const summaries = buildSummaries(documentType, parties, flags, riskScore, facts);
   const obligations = buildObligations(documentType, parties, flags, facts);
@@ -1119,5 +1279,6 @@ export function analyzeDocument(text: string): DocumentAnalysis {
     chatContext,
     kbMatches,
     missingProtections,
+    financialRisk,
   };
 }

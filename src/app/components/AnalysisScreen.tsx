@@ -4,7 +4,7 @@ import { Header } from './Header';
 import { ComplexitySlider } from './ComplexitySlider';
 import { useDocument } from '../lib/documentStore';
 import { getTier } from '../lib/complexityContent';
-import type { GuidanceItem } from '../lib/documentAnalyzer';
+import type { GuidanceItem, FinancialRiskLevel } from '../lib/documentAnalyzer';
 import { generatePDFReport } from '../lib/pdfReport';
 import {
   CheckCircle2, AlertTriangle, XCircle, Shield, FileText,
@@ -144,15 +144,70 @@ export function AnalysisScreen() {
                 <Shield className="w-6 h-6 text-purple-600 dark:text-purple-400" />
                 <h3 className="font-bold text-foreground">Risk Score</h3>
               </div>
-              <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+
+              {/* Score number + label */}
+              <div className="flex items-end gap-3 mb-3">
+                <p className={`text-4xl font-bold ${riskScore >= 70 ? 'text-red-500' : riskScore >= 35 ? 'text-yellow-500' : 'text-green-500'}`}>
+                  {riskScore}%
+                </p>
+                <span className={`mb-1 text-xs font-bold px-2 py-0.5 rounded-full ${
+                  riskScore >= 70
+                    ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400'
+                    : riskScore >= 35
+                    ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
+                    : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                }`}>
+                  {riskScore >= 70 ? 'High Risk' : riskScore >= 35 ? 'Medium Risk' : 'Low Risk'}
+                </span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full h-3 bg-muted rounded-full overflow-hidden mb-4">
                 <motion.div
                   initial={{ width: 0 }} animate={{ width: `${riskScore}%` }}
                   transition={{ duration: 1, delay: 0.5 }}
                   className={`h-full rounded-full ${riskScore >= 70 ? 'bg-red-500' : riskScore >= 35 ? 'bg-yellow-500' : 'bg-green-500'}`}
                 />
               </div>
-              <p className="text-3xl font-bold text-foreground mt-3">{riskScore}%</p>
-              <p className="text-sm text-muted-foreground">Potential Concerns</p>
+
+              {/* Score breakdown */}
+              <div className="space-y-1.5 mb-3">
+                {/* Clause risk component */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Clause Risk</span>
+                  <span className="font-semibold text-foreground">
+                    {Math.min(riskScore - analysis.financialRisk.score, 100)} pts
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-purple-400"
+                    style={{ width: `${Math.min(riskScore - analysis.financialRisk.score, 100)}%` }}
+                  />
+                </div>
+
+                {/* Financial risk component */}
+                <div className="flex items-center justify-between text-xs mt-1">
+                  <span className="text-muted-foreground">Financial Risk</span>
+                  <span className="font-semibold text-foreground">{analysis.financialRisk.score} pts</span>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${
+                      analysis.financialRisk.score >= 20 ? 'bg-red-400' :
+                      analysis.financialRisk.score >= 10 ? 'bg-yellow-400' : 'bg-green-400'
+                    }`}
+                    style={{ width: `${(analysis.financialRisk.score / 30) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Financial score note */}
+              {analysis.financialRisk.score > 0 && (
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {analysis.financialRisk.scoreBreakdown}
+                </p>
+              )}
             </motion.div>
           </div>
 
@@ -186,6 +241,41 @@ export function AnalysisScreen() {
                 <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
                 <h3 className="text-xl font-bold text-foreground">Key Risks</h3>
               </div>
+
+              {/* Risk Score banner */}
+              <div className={`flex items-center justify-between px-4 py-3 rounded-xl mb-4 ${
+                riskScore >= 70
+                  ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+                  : riskScore >= 35
+                  ? 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800'
+                  : 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-base">⚠️</span>
+                  <span className="text-sm font-semibold text-foreground">
+                    Risk Score: <span className={`text-lg font-bold ${
+                      riskScore >= 70 ? 'text-red-600 dark:text-red-400'
+                      : riskScore >= 35 ? 'text-yellow-600 dark:text-yellow-400'
+                      : 'text-green-600 dark:text-green-400'
+                    }`}>{riskScore}%</span>
+                  </span>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                    riskScore >= 70
+                      ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400'
+                      : riskScore >= 35
+                      ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
+                      : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                  }`}>
+                    {riskScore >= 70 ? 'High Risk' : riskScore >= 35 ? 'Medium Risk' : 'Low Risk'}
+                  </span>
+                </div>
+                <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${riskScore >= 70 ? 'bg-red-500' : riskScore >= 35 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                    style={{ width: `${riskScore}%` }}
+                  />
+                </div>
+              </div>
               <div className="space-y-3">
                 {risks.map((risk, i) => (
                   <div key={i} className="flex items-start gap-3">
@@ -208,6 +298,99 @@ export function AnalysisScreen() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5, delay: 0.55 }}
+              className="bg-card rounded-2xl border border-border p-6 lg:col-span-2 transition-colors duration-300 dark:shadow-[0_0_20px_rgba(59,130,246,0.05)]"
+            >
+              {/* Financial & Transaction Risk Analysis */}
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-xl">💳</span>
+                <h3 className="text-xl font-bold text-foreground">Financial & Transaction Risk Analysis</h3>
+              </div>
+
+              {/* Risk level pills */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {(
+                  [
+                    { label: 'Financial Clarity', level: analysis.financialRisk.clarityLevel },
+                    { label: 'Payment Method', level: analysis.financialRisk.paymentMethodRisk },
+                    { label: 'Timeline', level: analysis.financialRisk.timelineRisk },
+                  ] as { label: string; level: FinancialRiskLevel }[]
+                ).map(({ label, level }) => (
+                  <span key={label} className={`text-xs font-semibold px-3 py-1 rounded-full border ${
+                    level === 'high'   ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800' :
+                    level === 'medium' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800' :
+                                         'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800'
+                  }`}>
+                    {label}: {level.charAt(0).toUpperCase() + level.slice(1)}
+                  </span>
+                ))}
+                <span className="text-xs font-semibold px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+                  +{analysis.financialRisk.score} pts to score
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                {/* Amounts */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Extracted Amounts</p>
+                  {analysis.financialRisk.extractedAmounts.length > 0
+                    ? analysis.financialRisk.extractedAmounts.map((a, i) => (
+                        <p key={i} className="text-sm text-foreground font-medium">{a}</p>
+                      ))
+                    : <p className="text-sm text-muted-foreground italic">Not specified in document</p>
+                  }
+                </div>
+                {/* Dates */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Payment Dates</p>
+                  {analysis.financialRisk.extractedDates.length > 0
+                    ? analysis.financialRisk.extractedDates.map((d, i) => (
+                        <p key={i} className="text-sm text-foreground">{d}</p>
+                      ))
+                    : <p className="text-sm text-muted-foreground italic">Not specified in document</p>
+                  }
+                </div>
+                {/* Methods */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Payment Methods</p>
+                  {analysis.financialRisk.paymentMethods.length > 0
+                    ? analysis.financialRisk.paymentMethods.map((m, i) => (
+                        <p key={i} className="text-sm text-foreground">{m}</p>
+                      ))
+                    : <p className="text-sm text-muted-foreground italic">Not specified in document</p>
+                  }
+                </div>
+              </div>
+
+              {/* Installments */}
+              {analysis.financialRisk.installments.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Installment Details</p>
+                  {analysis.financialRisk.installments.map((inst, i) => (
+                    <p key={i} className="text-sm text-foreground">{inst}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* Observations */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Observations</p>
+                {analysis.financialRisk.observations.map((obs, i) => (
+                  <div key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                    <span className="flex-shrink-0 mt-0.5">•</span>
+                    <span>{obs}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Score impact */}
+              <div className="mt-4 p-3 bg-muted rounded-lg">
+                <p className="text-xs text-muted-foreground">{analysis.financialRisk.scoreBreakdown}</p>
               </div>
             </motion.div>
 
